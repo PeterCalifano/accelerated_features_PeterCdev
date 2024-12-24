@@ -62,15 +62,24 @@ def main():
                            'XFeat', pretrained=True, top_k=4096)
     
     # Load some example images
-    im1 = np.copy(imio.v2.imread(
-        'https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/ref.png')[..., ::-1])
-    im2 = np.copy(imio.v2.imread(
-        'https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/tgt.png')[..., ::-1])
+    #im1 = np.copy(imio.v2.imread(
+    #    'https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/ref.png')[..., ::-1])
+    #im2 = np.copy(imio.v2.imread(
+    #    'https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/tgt.png')[..., ::-1])
+
+    dataset_img_path = "/home/peterc/devDir/SLAM-repos/ORB_SLAM3_PeterCdev/Examples/Monocular/custom_datasets/2024_12_24_14_38_49/frames/"
+
+    # Pick frames
+    im1 = np.copy(imio.v2.imread(os.path.join(
+        dataset_img_path, '28442300762836.png'))[..., ::-1])
+    im2 = np.copy(imio.v2.imread(os.path.join(
+        dataset_img_path, '28448705146493.png'))[..., ::-1])
+
 
     """## Matching example - LightGlue"""
     # Inference with batch = 1
-    output0 = xfeat.detectAndCompute(im1, top_k=4096)[0]
-    output1 = xfeat.detectAndCompute(im2, top_k=4096)[0]
+    output0 = xfeat.detectAndCompute(im1, top_k=2048)[0]
+    output1 = xfeat.detectAndCompute(im2, top_k=2048)[0]
 
     # Update with image resolution (required)
     output0.update({'image_size': (im1.shape[1], im1.shape[0])})
