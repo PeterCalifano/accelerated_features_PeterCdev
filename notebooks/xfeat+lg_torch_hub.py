@@ -20,22 +20,11 @@ import cv2
 import matplotlib 
 # Set the backend to allow for plotting in the notebook
 matplotlib.use('tkagg')
-
 import matplotlib.pyplot as plt
 
 #pip install kornia kornia-rs --no-deps # REQUIRED for Lightglue matching
 
-xfeat = torch.hub.load('verlab/accelerated_features', 'XFeat', pretrained = True, top_k = 4096)
-
-#Load some example images
-im1 = np.copy(imio.v2.imread('https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/ref.png')[..., ::-1])
-im2 = np.copy(imio.v2.imread('https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/tgt.png')[..., ::-1])
-
 """## Simple function that fits an homography in a set of matches and draw the homography transform"""
-
-import cv2
-import numpy as np
-
 def warp_corners_and_draw_matches(ref_points, dst_points, img1, img2):
     # Calculate the Homography matrix
     H, mask = cv2.findHomography(ref_points, dst_points, cv2.USAC_MAGSAC, 3.5, maxIters=1_000, confidence=0.999)
@@ -68,18 +57,31 @@ def warp_corners_and_draw_matches(ref_points, dst_points, img1, img2):
 
     return img_matches
 
-"""## Matching example - LightGlue"""
+def main():
+    xfeat = torch.hub.load('verlab/accelerated_features',
+                           'XFeat', pretrained=True, top_k=4096)
+    
+    # Load some example images
+    im1 = np.copy(imio.v2.imread(
+        'https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/ref.png')[..., ::-1])
+    im2 = np.copy(imio.v2.imread(
+        'https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/tgt.png')[..., ::-1])
 
-# Inference with batch = 1
-output0 = xfeat.detectAndCompute(im1, top_k = 4096)[0]
-output1 = xfeat.detectAndCompute(im2, top_k = 4096)[0]
+    """## Matching example - LightGlue"""
+    # Inference with batch = 1
+    output0 = xfeat.detectAndCompute(im1, top_k=4096)[0]
+    output1 = xfeat.detectAndCompute(im2, top_k=4096)[0]
 
-#Update with image resolution (required)
-output0.update({'image_size': (im1.shape[1], im1.shape[0])})
-output1.update({'image_size': (im2.shape[1], im2.shape[0])})
+    # Update with image resolution (required)
+    output0.update({'image_size': (im1.shape[1], im1.shape[0])})
+    output1.update({'image_size': (im2.shape[1], im2.shape[0])})
 
-mkpts_0, mkpts_1, out = xfeat.match_lighterglue(output0, output1)
+    mkpts_0, mkpts_1, out = xfeat.match_lighterglue(output0, output1)
 
-canvas = warp_corners_and_draw_matches(mkpts_0, mkpts_1, im1, im2)
-plt.figure(figsize=(12,12))
-plt.imshow(canvas[..., ::-1]), plt.show()
+    canvas = warp_corners_and_draw_matches(mkpts_0, mkpts_1, im1, im2)
+    plt.figure(figsize=(12, 12))
+    plt.imshow(canvas[..., ::-1]), plt.show()
+
+
+if __name__ == '__main__':
+    main()
