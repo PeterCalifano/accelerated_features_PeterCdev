@@ -17,9 +17,13 @@ import os
 import torch
 import tqdm
 import cv2
+import matplotlib 
+# Set the backend to allow for plotting in the notebook
+matplotlib.use('tkagg')
+
 import matplotlib.pyplot as plt
 
-!pip install kornia kornia-rs --no-deps # REQUIRED for Lightglue matching
+#pip install kornia kornia-rs --no-deps # REQUIRED for Lightglue matching
 
 xfeat = torch.hub.load('verlab/accelerated_features', 'XFeat', pretrained = True, top_k = 4096)
 
