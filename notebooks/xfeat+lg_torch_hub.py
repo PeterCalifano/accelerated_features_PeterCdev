@@ -104,7 +104,11 @@ def main():
 
     # Test wrapper
     xfeat_wrapper.eval()
-    output_tuple = xfeat_wrapper([im1, im2])
+    output_tuple = xfeat_wrapper(
+        {'image0': im1, 'image1': im2})
+    
+    output_tuple_check = xfeat_wrapper(
+        [im1, im2])
 
     canvas = warp_corners_and_draw_matches(mkpts_0, mkpts_1, im1, im2)
     plt.figure(figsize=(12, 12))
