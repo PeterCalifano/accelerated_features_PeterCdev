@@ -10,16 +10,24 @@ Original file is located at
 
 ## Initialize XFeat
 """
+import os
+import sys
 
+REPO_XFEAT_PATH = "/home/peterc/devDir/ML-repos/accelerated_features_PeterCdev"
+print('Fetching models and weights from: ', REPO_XFEAT_PATH)
+sys.path.append(REPO_XFEAT_PATH)
+
+import matplotlib.pyplot as plt
+from modules.xfeat import XFeat
 import numpy as np
 import imageio as imio
-import os
 import torch
 import cv2
-import matplotlib 
+import matplotlib
+
 # Set the backend to allow for plotting in the notebook
 matplotlib.use('tkagg')
-import matplotlib.pyplot as plt
+
 
 #pip install kornia kornia-rs --no-deps # REQUIRED for Lightglue matching
 
@@ -57,8 +65,14 @@ def warp_corners_and_draw_matches(ref_points, dst_points, img1, img2):
     return img_matches
 
 def main():
-    xfeat = torch.hub.load('verlab/accelerated_features',
-                           'XFeat', pretrained=True, top_k=4096)
+
+    # Define XFeat model class to load
+    # Use class in xfeat.py in accelerated_features_PeterCdev repo
+    xfeat = XFeat(weights=os.path.join(
+        REPO_XFEAT_PATH, "weights/xfeat.pt"), top_k=4096, detection_threshold=0.05)
+    
+    #xfeat = torch.hub.load('verlab/accelerated_features',
+    #                       'XFeat', pretrained=True, top_k=4096)
     
     # Load some example images
     #im1 = np.copy(imio.v2.imread(
@@ -84,7 +98,7 @@ def main():
     output0.update({'image_size': (im1.shape[1], im1.shape[0])})
     output1.update({'image_size': (im2.shape[1], im2.shape[0])})
 
-    mkpts_0, mkpts_1, out = xfeat.match_lighterglue(output0, output1)
+    mkpts_0, mkpts_1, matches, scores = xfeat.match_lighterglue(output0, output1)
 
     canvas = warp_corners_and_draw_matches(mkpts_0, mkpts_1, im1, im2)
     plt.figure(figsize=(12, 12))

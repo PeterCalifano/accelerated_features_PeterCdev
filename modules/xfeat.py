@@ -8,8 +8,7 @@ import numpy as np
 import os
 import torch
 import torch.nn.functional as F
-
-import tqdm
+from torch import nn
 
 from modules.model import *
 from modules.interpolator import InterpolateSparse2d
@@ -159,7 +158,7 @@ class XFeat(nn.Module):
 
 		idxs = out['matches'][0]
 
-		return d0['keypoints'][idxs[:, 0]].cpu().numpy(), d1['keypoints'][idxs[:, 1]].cpu().numpy(), out['matches'][0].cpu().numpy()
+		return d0['keypoints'][idxs[:, 0]].cpu().numpy(), d1['keypoints'][idxs[:, 1]].cpu().numpy(), out['matches'][0].cpu().numpy(), out['scores'][0].cpu().numpy()
 
 
 	@torch.inference_mode()
