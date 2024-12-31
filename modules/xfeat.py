@@ -5,7 +5,7 @@
 """
 
 import numpy as np
-import os
+import os, sys
 import torch
 import torch.nn.functional as F
 from torch import nn
@@ -414,3 +414,69 @@ class XFeat(nn.Module):
 			x = torch.tensor(x).permute(0,3,1,2)/255
 
 		return x
+
+
+class XFeatLightGlueWrapper(nn.Module):
+    def __init__(self, top_k: int = 4096, detection_threshold: float = 0.05):
+        super(XFeatLightGlueWrapper, self).__init__()
+        # from modules.lighterglue import LighterGlue
+
+        # Define XFeat model class to load
+        # Use class in xfeat.py in accelerated_features_PeterCdev repo
+        self.xfeat = XFeat(weights=os.path.join("../weights/xfeat.pt"), top_k=top_k, detection_threshold=detection_threshold)
+
+        # Use class in lighterglue.py in accelerated_features_PeterCdev repo
+        # self.lighterglue = LighterGlue( weights = os.path.join(REPO_XFEAT_PATH, "weights/xfeat-lighterglue.pt") )
+
+    def forward(self, input_data: dict | list[torch.Tensor]):
+
+        if isinstance(input_data, dict):
+            if 'img0' in input_data and 'img1' in input_data:
+                im1 = input_data['img0']
+                im2 = input_data['img1']
+            else:
+                raise ValueError(
+                    "Input dictionary must contain keys 'img0' and 'img1'.")
+
+        elif isinstance(input_data, list):
+            if len(input_data) == 2:
+                im1 = input_data[0]
+                im2 = input_data[1]
+            else:
+                raise ValueError(
+                    "Input list must contain two torch tensors (1 image pair).")
+        else:
+            raise ValueError(
+            	"Input data type not valid. Must be a dictionary or a list.")
+
+        if not isinstance(im1, torch.Tensor) or not isinstance(im2, torch.Tensor):
+            raise ValueError("Input images not valid. Must be torch tensors.")
+
+        # Inference with batch = 1
+        kpsDict0 = self.xfeat.detectAndCompute(im1, top_k=2048)[0]  # Get keypoints only
+        kpsDict1 = self.xfeat.detectAndCompute(im2, top_k=2048)[0]
+
+        # Update with image resolution (required)
+        # TODO understand what this does
+        kpsDict0.update({'image_size': (im1.shape[1], im1.shape[0])})
+        kpsDict1.update({'image_size': (im2.shape[1], im2.shape[0])})
+
+        # Match keypoints (no need to do automatically)
+        # lighterglue_input_dict = {
+        #    'keypoints0': kpsDict0['keypoints'][None, ...],
+        #    'keypoints1': kpsDict1['keypoints'][None, ...],
+        #    'descriptors0': kpsDict0['descriptors'][None, ...],
+        #    'descriptors1': kpsDict1['descriptors'][None, ...],
+        #    'image_size0': torch.tensor(kpsDict0['image_size']).to(self.xfeat.dev)[None, ...],
+        #    'image_size1': torch.tensor(kpsDict1['image_size']).to(self.xfeat.dev)[None, ...]
+        # }
+        # Output:
+        # d0['keypoints'][idxs[:, 0]].cpu().numpy(),
+        # d1['keypoints'][idxs[:, 1]].cpu().numpy(),
+        # out['matches'][0].cpu().numpy()
+        # mkpts_0, mkpts_1, out = self.lighterglue(lighterglue_input_dict, min_conf=min_conf)
+
+        mkpts_0, mkpts_1, matches, scores = self.xfeat.match_lighterglue(
+            kpsDict0, kpsDict1)
+
+        return {'keypoints0': mkpts_0, 'keypoints1': mkpts_1, 'matches0': matches, 'matching_scores0': scores}
