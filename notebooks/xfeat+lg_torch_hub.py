@@ -18,7 +18,7 @@ print('Fetching models and weights from: ', REPO_XFEAT_PATH)
 sys.path.append(REPO_XFEAT_PATH)
 
 import matplotlib.pyplot as plt
-from modules.xfeat import XFeat
+from modules.xfeat import XFeat, XFeatLightGlueWrapper
 import numpy as np
 import imageio as imio
 import torch
@@ -88,6 +88,8 @@ def main():
     im2 = np.copy(imio.v2.imread(os.path.join(
         dataset_img_path, '28448705146493.png'))[..., ::-1])
 
+    # Define wrapper
+    xfeat_wrapper = XFeatLightGlueWrapper()
 
     """## Matching example - LightGlue"""
     # Inference with batch = 1
@@ -99,6 +101,10 @@ def main():
     output1.update({'image_size': (im2.shape[1], im2.shape[0])})
 
     mkpts_0, mkpts_1, matches, scores = xfeat.match_lighterglue(output0, output1)
+
+    # Test wrapper
+    xfeat_wrapper.eval()
+    output_tuple = xfeat_wrapper([im1, im2])
 
     canvas = warp_corners_and_draw_matches(mkpts_0, mkpts_1, im1, im2)
     plt.figure(figsize=(12, 12))

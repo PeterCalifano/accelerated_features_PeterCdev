@@ -423,20 +423,21 @@ class XFeatLightGlueWrapper(nn.Module):
 
         # Define XFeat model class to load
         # Use class in xfeat.py in accelerated_features_PeterCdev repo
-        self.xfeat = XFeat(weights=os.path.join("../weights/xfeat.pt"), top_k=top_k, detection_threshold=detection_threshold)
+        self.xfeat = XFeat(weights=os.path.abspath(os.path.dirname(
+            __file__)) + '/../weights/xfeat.pt', top_k=top_k, detection_threshold=detection_threshold)
 
         # Use class in lighterglue.py in accelerated_features_PeterCdev repo
         # self.lighterglue = LighterGlue( weights = os.path.join(REPO_XFEAT_PATH, "weights/xfeat-lighterglue.pt") )
 
-    def forward(self, input_data: dict | list[torch.Tensor]):
+    def forward(self, input_data: dict | list[torch.Tensor | np.ndarray]) -> dict:
 
         if isinstance(input_data, dict):
-            if 'img0' in input_data and 'img1' in input_data:
-                im1 = input_data['img0']
-                im2 = input_data['img1']
+            if 'image0' in input_data and 'image1' in input_data:
+                im1 = input_data['image0']
+                im2 = input_data['image1']
             else:
                 raise ValueError(
-                    "Input dictionary must contain keys 'img0' and 'img1'.")
+                    "Input dictionary must contain keys 'image0' and 'image1'.")
 
         elif isinstance(input_data, list):
             if len(input_data) == 2:
@@ -449,8 +450,8 @@ class XFeatLightGlueWrapper(nn.Module):
             raise ValueError(
             	"Input data type not valid. Must be a dictionary or a list.")
 
-        if not isinstance(im1, torch.Tensor) or not isinstance(im2, torch.Tensor):
-            raise ValueError("Input images not valid. Must be torch tensors.")
+        if not isinstance(im1, (torch.Tensor, np.ndarray)) or not isinstance(im2, (torch.Tensor, np.ndarray)):
+            raise ValueError("Input images not valid. Must be torch tensors or np.ndarray.")
 
         # Inference with batch = 1
         kpsDict0 = self.xfeat.detectAndCompute(im1, top_k=2048)[0]  # Get keypoints only
