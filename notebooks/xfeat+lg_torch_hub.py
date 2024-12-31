@@ -15,7 +15,6 @@ import numpy as np
 import imageio as imio
 import os
 import torch
-import tqdm
 import cv2
 import matplotlib 
 # Set the backend to allow for plotting in the notebook

@@ -216,7 +216,7 @@ class XFeat(nn.Module):
 
 		return matches if B > 1 else (matches[0][:, :2].cpu().numpy(), matches[0][:, 2:].cpu().numpy())
 
-	def preprocess_tensor(self, x):
+	def preprocess_tensor(self, x: np.ndarray | torch.Tensor):
 		""" Guarantee that image is divisible by 32 to avoid aliasing artifacts. """
 		if isinstance(x, np.ndarray):
 			if len(x.shape) == 3:
@@ -225,7 +225,21 @@ class XFeat(nn.Module):
 				x = torch.tensor(x[..., None]).permute(2,0,1)[None]
 			else:
 				raise RuntimeError('For numpy arrays, only (H,W) or (H,W,C) format is supported.')
-		
+			
+		elif isinstance(x, torch.Tensor):
+
+			# Check size of tensor
+			if len(x.shape) == 4:
+				pass
+			elif len(x.shape) == 3:
+				x = x.unsqueeze(0)
+			elif len(x.shape) == 2:
+				x = x.unsqueeze(0).unsqueeze(0)
+			else:
+				raise RuntimeError('Invalid input tensor shape: {}'.format(x.shape))
+
+		else:
+			raise TypeError('Input needs to be a numpy array or torch tensor')
 		
 		if len(x.shape) != 4:
 			raise RuntimeError('Input tensor needs to be in (B,C,H,W) format')
