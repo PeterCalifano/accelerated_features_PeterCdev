@@ -13,15 +13,25 @@ from torch import nn
 from modules.model import *
 from modules.interpolator import InterpolateSparse2d
 
+try:
+	from pyTorchAutoForge.utils import GetDevice
+except:
+	# Define function
+	GetDevice = lambda: 'cuda' if torch.cuda.is_available() else 'cpu'
+
 class XFeat(nn.Module):
 	""" 
 		Implements the inference module for XFeat. 
 		It supports inference for both sparse and semi-dense feature extraction & matching.
 	"""
 
-	def __init__(self, weights = os.path.abspath(os.path.dirname(__file__)) + '/../weights/xfeat.pt', top_k = 4096, detection_threshold=0.05):
+	def __init__(self, weights = os.path.abspath(os.path.dirname(__file__)) + '/../weights/xfeat.pt', top_k = 4096, detection_threshold=0.05, device : str | None = None):
 		super().__init__()
-		self.dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+		if device is None:
+			device = GetDevice()
+
+		self.dev = torch.device(device)
 		self.net = XFeatModel().to(self.dev).eval()
 		self.top_k = top_k
 		self.detection_threshold = detection_threshold
@@ -417,14 +427,16 @@ class XFeat(nn.Module):
 
 
 class XFeatLightGlueWrapper(nn.Module):
-    def __init__(self, top_k: int = 4096, detection_threshold: float = 0.05):
+    def __init__(self, top_k: int = 4096, detection_threshold: float = 0.05, device : str | None = None):
         super(XFeatLightGlueWrapper, self).__init__()
         # from modules.lighterglue import LighterGlue
+		if device is None:
+			device = GetDevice()
 
         # Define XFeat model class to load
         # Use class in xfeat.py in accelerated_features_PeterCdev repo
         self.xfeat = XFeat(weights=os.path.abspath(os.path.dirname(
-            __file__)) + '/../weights/xfeat.pt', top_k=top_k, detection_threshold=detection_threshold)
+            __file__)) + '/../weights/xfeat.pt', top_k=top_k, detection_threshold=detection_threshold, device=device)
 
         # Use class in lighterglue.py in accelerated_features_PeterCdev repo
         # self.lighterglue = LighterGlue( weights = os.path.join(REPO_XFEAT_PATH, "weights/xfeat-lighterglue.pt") )
