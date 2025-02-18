@@ -154,6 +154,7 @@ class XFeat(nn.Module):
 		}
 
 		#Dict -> log_assignment: [B x M+1 x N+1] matches0: [B x M] matching_scores0: [B x M] matches1: [B x N] matching_scores1: [B x N] matches: List[[Si x 2]], scores: List[[Si]]
+		print('Matching keypoints with LighterGlue...')
 		out = self.lighterglue(data, min_conf = min_conf)
 
 		idxs = out['matches'][0]
@@ -454,6 +455,7 @@ class XFeatLightGlueWrapper(nn.Module):
             raise ValueError("Input images not valid. Must be torch tensors or np.ndarray.")
 
         # Inference with batch = 1
+		print('Extracting and descripting keypoints with LighterGlue...')
         kpsDict0 = self.xfeat.detectAndCompute(im1, top_k=2048)[0]  # Get keypoints only
         kpsDict1 = self.xfeat.detectAndCompute(im2, top_k=2048)[0]
 
@@ -477,6 +479,8 @@ class XFeatLightGlueWrapper(nn.Module):
         # out['matches'][0].cpu().numpy()
         # mkpts_0, mkpts_1, out = self.lighterglue(lighterglue_input_dict, min_conf=min_conf)
 
+		# FIXME XFeat + Light glue with server is failing here
+	
         mkpts_0, mkpts_1, matches, scores = self.xfeat.match_lighterglue(
             kpsDict0, kpsDict1)
 
