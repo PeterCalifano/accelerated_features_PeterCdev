@@ -80,13 +80,19 @@ def main():
     #im2 = np.copy(imio.v2.imread(
     #    'https://raw.githubusercontent.com/verlab/accelerated_features/main/assets/tgt.png')[..., ::-1])
 
-    dataset_img_path = "/home/peterc/devDir/SLAM-repos/ORB_SLAM3_PeterCdev/Examples/Monocular/custom_datasets/2024_12_24_14_38_49/frames/"
+    #dataset_img_path = "/home/peterc/devDir/SLAM-repos/ORB_SLAM3_PeterCdev/Examples/Monocular/#custom_datasets/2024_12_24_14_38_49/frames/"
+    #img1_name = '28442300762836.png'
+    #img2_name = '28448705146493.png'
+
+    dataset_img_path = "/home/peterc/devDir/nav-backend/simulationCodes/data/datasets/TestCase_ItokawaRCS1_RTO_3t1_J11p0_45dt"
+    img1_name = '000000.png'
+    img2_name = '000001.png'
 
     # Pick frames
     im1 = np.copy(imio.v2.imread(os.path.join(
-        dataset_img_path, '28442300762836.png'))[..., ::-1])
+        dataset_img_path, img1_name))[..., ::-1])
     im2 = np.copy(imio.v2.imread(os.path.join(
-        dataset_img_path, '28448705146493.png'))[..., ::-1])
+        dataset_img_path, img2_name))[..., ::-1])
 
     # Define wrapper
     xfeat_wrapper = XFeatLightGlueWrapper()

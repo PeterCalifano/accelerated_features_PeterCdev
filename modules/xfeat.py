@@ -13,15 +13,25 @@ from torch import nn
 from modules.model import *
 from modules.interpolator import InterpolateSparse2d
 
+try:
+	from pyTorchAutoForge.utils import GetDevice
+except:
+	# Define function
+	GetDevice = lambda: 'cuda' if torch.cuda.is_available() else 'cpu'
+
 class XFeat(nn.Module):
 	""" 
 		Implements the inference module for XFeat. 
 		It supports inference for both sparse and semi-dense feature extraction & matching.
 	"""
 
-	def __init__(self, weights = os.path.abspath(os.path.dirname(__file__)) + '/../weights/xfeat.pt', top_k = 4096, detection_threshold=0.05):
+	def __init__(self, weights = os.path.abspath(os.path.dirname(__file__)) + '/../weights/xfeat.pt', top_k = 4096, detection_threshold=0.05, device : str | None = None):
 		super().__init__()
-		self.dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+		if device is None:
+			device = GetDevice()
+
+		self.dev = torch.device(device)
 		self.net = XFeatModel().to(self.dev).eval()
 		self.top_k = top_k
 		self.detection_threshold = detection_threshold
@@ -208,8 +218,7 @@ class XFeat(nn.Module):
 		idxs_list = self.batch_match(out1['descriptors'], out2['descriptors'] )
 		B = len(im_set1)
 
-		#Refine coarse matches
-		#this part is harder to batch, currently iterate
+		# Refine coarse matches this part is harder to batch, currently iterate
 		matches = []
 		for b in range(B):
 			matches.append(self.refine_matches(out1, out2, matches = idxs_list, batch_idx=b))
@@ -418,14 +427,15 @@ class XFeat(nn.Module):
 
 
 class XFeatLightGlueWrapper(nn.Module):
-    def __init__(self, top_k: int = 4096, detection_threshold: float = 0.05):
+    def __init__(self, top_k: int = 4096, detection_threshold: float = 0.05, device : str | None = None):
         super(XFeatLightGlueWrapper, self).__init__()
-        # from modules.lighterglue import LighterGlue
+        if device is None:
+            device = GetDevice()
 
         # Define XFeat model class to load
         # Use class in xfeat.py in accelerated_features_PeterCdev repo
         self.xfeat = XFeat(weights=os.path.abspath(os.path.dirname(
-            __file__)) + '/../weights/xfeat.pt', top_k=top_k, detection_threshold=detection_threshold)
+            __file__)) + '/../weights/xfeat.pt', top_k=top_k, detection_threshold=detection_threshold, device=device)
 
         # Use class in lighterglue.py in accelerated_features_PeterCdev repo
         # self.lighterglue = LighterGlue( weights = os.path.join(REPO_XFEAT_PATH, "weights/xfeat-lighterglue.pt") )
@@ -460,7 +470,6 @@ class XFeatLightGlueWrapper(nn.Module):
         kpsDict1 = self.xfeat.detectAndCompute(im2, top_k=2048)[0]
 
         # Update with image resolution (required)
-        # TODO understand what this does
         kpsDict0.update({'image_size': (im1.shape[1], im1.shape[0])})
         kpsDict1.update({'image_size': (im2.shape[1], im2.shape[0])})
 
@@ -484,4 +493,6 @@ class XFeatLightGlueWrapper(nn.Module):
         mkpts_0, mkpts_1, matches, scores = self.xfeat.match_lighterglue(
             kpsDict0, kpsDict1)
 
-        return {'keypoints0': mkpts_0, 'keypoints1': mkpts_1, 'matches0': matches, 'matching_scores0': scores}
+		# Return output dictionary ['keypoints0', 'scores0', 'descriptors0', 'keypoints1', 'scores1', 'descriptors1', 'matches0', 'matches1', 'matching_scores0', 'matching_scores1']
+		
+        return {'keypoints0': mkpts_0, 'scores0': kpsDict0['scores'], 'descriptors0': kpsDict0['descriptors'],'keypoints1': mkpts_1, 'scores1': kpsDict1['scores'], 'descriptors1': kpsDict1['descriptors'], 'matches0': matches, 'matching_scores0': scores}
