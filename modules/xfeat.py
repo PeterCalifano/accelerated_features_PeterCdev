@@ -217,8 +217,7 @@ class XFeat(nn.Module):
 		idxs_list = self.batch_match(out1['descriptors'], out2['descriptors'] )
 		B = len(im_set1)
 
-		#Refine coarse matches
-		#this part is harder to batch, currently iterate
+		# Refine coarse matches this part is harder to batch, currently iterate
 		matches = []
 		for b in range(B):
 			matches.append(self.refine_matches(out1, out2, matches = idxs_list, batch_idx=b))
@@ -429,9 +428,8 @@ class XFeat(nn.Module):
 class XFeatLightGlueWrapper(nn.Module):
     def __init__(self, top_k: int = 4096, detection_threshold: float = 0.05, device : str | None = None):
         super(XFeatLightGlueWrapper, self).__init__()
-        # from modules.lighterglue import LighterGlue
-		if device is None:
-			device = GetDevice()
+        if device is None:
+            device = GetDevice()
 
         # Define XFeat model class to load
         # Use class in xfeat.py in accelerated_features_PeterCdev repo
@@ -466,11 +464,11 @@ class XFeatLightGlueWrapper(nn.Module):
             raise ValueError("Input images not valid. Must be torch tensors or np.ndarray.")
 
         # Inference with batch = 1
-        kpsDict0 = self.xfeat.detectAndCompute(im1, top_k=2048)[0]  # Get keypoints only
+		# Get keypoints only
+        kpsDict0 = self.xfeat.detectAndCompute(im1, top_k=2048)[0]  
         kpsDict1 = self.xfeat.detectAndCompute(im2, top_k=2048)[0]
 
         # Update with image resolution (required)
-        # TODO understand what this does
         kpsDict0.update({'image_size': (im1.shape[1], im1.shape[0])})
         kpsDict1.update({'image_size': (im2.shape[1], im2.shape[0])})
 
@@ -492,4 +490,6 @@ class XFeatLightGlueWrapper(nn.Module):
         mkpts_0, mkpts_1, matches, scores = self.xfeat.match_lighterglue(
             kpsDict0, kpsDict1)
 
-        return {'keypoints0': mkpts_0, 'keypoints1': mkpts_1, 'matches0': matches, 'matching_scores0': scores}
+		# Return output dictionary ['keypoints0', 'scores0', 'descriptors0', 'keypoints1', 'scores1', 'descriptors1', 'matches0', 'matches1', 'matching_scores0', 'matching_scores1']
+		
+        return {'keypoints0': mkpts_0, 'scores0': kpsDict0['scores'], 'descriptors0': kpsDict0['descriptors'],'keypoints1': mkpts_1, 'scores1': kpsDict1['scores'], 'descriptors1': kpsDict1['descriptors'], 'matches0': matches, 'matching_scores0': scores}
