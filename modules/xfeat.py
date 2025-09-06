@@ -1,15 +1,15 @@
-
 """
 	"XFeat: Accelerated Features for Lightweight Image Matching, CVPR 2024."
 	https://www.verlab.dcc.ufmg.br/descriptors/xfeat_cvpr24/
 """
 
 import numpy as np
-import os, sys
+import os
+import sys
 import torch
 import torch.nn.functional as F
 from torch import nn
-
+from typing import Literal
 from modules.model import *
 from modules.interpolator import InterpolateSparse2d
 
@@ -17,15 +17,16 @@ try:
 	from pyTorchAutoForge.utils import GetDevice
 except:
 	# Define function
-	GetDevice = lambda: 'cuda' if torch.cuda.is_available() else 'cpu'
+	def GetDevice(): return 'cuda' if torch.cuda.is_available() else 'cpu'
+
 
 class XFeat(nn.Module):
 	""" 
-		Implements the inference module for XFeat. 
-		It supports inference for both sparse and semi-dense feature extraction & matching.
+			Implements the inference module for XFeat. 
+			It supports inference for both sparse and semi-dense feature extraction & matching.
 	"""
 
-	def __init__(self, weights = os.path.abspath(os.path.dirname(__file__)) + '/../weights/xfeat.pt', top_k = 4096, detection_threshold=0.05, device : str | None = None):
+	def __init__(self, weights=os.path.abspath(os.path.dirname(__file__)) + '/../weights/xfeat.pt', top_k=4096, detection_threshold=0.05, device: str | None = None):
 		super().__init__()
 
 		if device is None:
@@ -39,93 +40,96 @@ class XFeat(nn.Module):
 		if weights is not None:
 			if isinstance(weights, str):
 				print('loading weights from: ' + weights)
-				self.net.load_state_dict(torch.load(weights, map_location=self.dev))
+				self.net.load_state_dict(torch.load(
+					weights, map_location=self.dev))
 			else:
 				self.net.load_state_dict(weights)
 
 		self.interpolator = InterpolateSparse2d('bicubic')
 
-		#Try to import LightGlue from Kornia
+		# Try to import LightGlue from Kornia
 		self.kornia_available = False
 		self.lighterglue = None
-		try:
-			import kornia
-			self.kornia_available=True
-		except:
-			pass
 
+		from modules.lighterglue import LighterGlue
+		self.lighterglue = LighterGlue()
 
 	@torch.inference_mode()
-	def detectAndCompute(self, x, top_k = None, detection_threshold = None):
+	def detectAndCompute(self, x, top_k=None, detection_threshold=None):
 		"""
-			Compute sparse keypoints & descriptors. Supports batched mode.
+				Compute sparse keypoints & descriptors. Supports batched mode.
 
-			input:
-				x -> torch.Tensor(B, C, H, W): grayscale or rgb image
-				top_k -> int: keep best k features
-			return:
-				List[Dict]: 
-					'keypoints'    ->   torch.Tensor(N, 2): keypoints (x,y)
-					'scores'       ->   torch.Tensor(N,): keypoint scores
-					'descriptors'  ->   torch.Tensor(N, 64): local features
+				input:
+						x -> torch.Tensor(B, C, H, W): grayscale or rgb image
+						top_k -> int: keep best k features
+				return:
+						List[Dict]: 
+								'keypoints'    ->   torch.Tensor(N, 2): keypoints (x,y)
+								'scores'       ->   torch.Tensor(N,): keypoint scores
+								'descriptors'  ->   torch.Tensor(N, 64): local features
 		"""
-		if top_k is None: top_k = self.top_k
-		if detection_threshold is None: detection_threshold = self.detection_threshold
+		if top_k is None:
+			top_k = self.top_k
+		if detection_threshold is None:
+			detection_threshold = self.detection_threshold
 		x, rh1, rw1 = self.preprocess_tensor(x)
 
 		B, _, _H1, _W1 = x.shape
-        
+
 		M1, K1, H1 = self.net(x)
 		M1 = F.normalize(M1, dim=1)
 
-		#Convert logits to heatmap and extract kpts
+		# Convert logits to heatmap and extract kpts
 		K1h = self.get_kpts_heatmap(K1)
 		mkpts = self.NMS(K1h, threshold=detection_threshold, kernel_size=5)
 
-		#Compute reliability scores
+		# Compute reliability scores
 		_nearest = InterpolateSparse2d('nearest')
 		_bilinear = InterpolateSparse2d('bilinear')
-		scores = (_nearest(K1h, mkpts, _H1, _W1) * _bilinear(H1, mkpts, _H1, _W1)).squeeze(-1)
+		scores = (_nearest(K1h, mkpts, _H1, _W1) *
+				  _bilinear(H1, mkpts, _H1, _W1)).squeeze(-1)
 		scores[torch.all(mkpts == 0, dim=-1)] = -1
 
-		#Select top-k features
+		# Select top-k features
 		idxs = torch.argsort(-scores)
-		mkpts_x  = torch.gather(mkpts[...,0], -1, idxs)[:, :top_k]
-		mkpts_y  = torch.gather(mkpts[...,1], -1, idxs)[:, :top_k]
-		mkpts = torch.cat([mkpts_x[...,None], mkpts_y[...,None]], dim=-1)
+		mkpts_x = torch.gather(mkpts[..., 0], -1, idxs)[:, :top_k]
+		mkpts_y = torch.gather(mkpts[..., 1], -1, idxs)[:, :top_k]
+		mkpts = torch.cat([mkpts_x[..., None], mkpts_y[..., None]], dim=-1)
 		scores = torch.gather(scores, -1, idxs)[:, :top_k]
 
-		#Interpolate descriptors at kpts positions
-		feats = self.interpolator(M1, mkpts, H = _H1, W = _W1)
+		# Interpolate descriptors at kpts positions
+		feats = self.interpolator(M1, mkpts, H=_H1, W=_W1)
 
-		#L2-Normalize
+		# L2-Normalize
 		feats = F.normalize(feats, dim=-1)
 
-		#Correct kpt scale
-		mkpts = mkpts * torch.tensor([rw1,rh1], device=mkpts.device).view(1, 1, -1)
+		# Correct kpt scale
+		mkpts = mkpts * torch.tensor([rw1, rh1],
+									 device=mkpts.device).view(1, 1, -1)
 
 		valid = scores > 0
-		return [  
-				   {'keypoints': mkpts[b][valid[b]],
-					'scores': scores[b][valid[b]],
-					'descriptors': feats[b][valid[b]]} for b in range(B) 
-			   ]
+		return [
+			{'keypoints': mkpts[b][valid[b]],
+			 'scores': scores[b][valid[b]],
+			 'descriptors': feats[b][valid[b]]} for b in range(B)
+		]
 
 	@torch.inference_mode()
-	def detectAndComputeDense(self, x, top_k = None, multiscale = True):
+	def detectAndComputeDense(self, x, top_k=None, multiscale=True):
 		"""
-			Compute dense *and coarse* descriptors. Supports batched mode.
+				Compute dense *and coarse* descriptors. Supports batched mode.
 
-			input:
-				x -> torch.Tensor(B, C, H, W): grayscale or rgb image
-				top_k -> int: keep best k features
-			return: features sorted by their reliability score -- from most to least
-				List[Dict]: 
-					'keypoints'    ->   torch.Tensor(top_k, 2): coarse keypoints
-					'scales'       ->   torch.Tensor(top_k,): extraction scale
-					'descriptors'  ->   torch.Tensor(top_k, 64): coarse local features
+				input:
+						x -> torch.Tensor(B, C, H, W): grayscale or rgb image
+						top_k -> int: keep best k features
+				return: features sorted by their reliability score -- from most to least
+						List[Dict]: 
+								'keypoints'    ->   torch.Tensor(top_k, 2): coarse keypoints
+								'scales'       ->   torch.Tensor(top_k,): extraction scale
+								'descriptors'  ->   torch.Tensor(top_k, 64): coarse local features
 		"""
-		if top_k is None: top_k = self.top_k
+		if top_k is None:
+			top_k = self.top_k
 		if multiscale:
 			mkpts, sc, feats = self.extract_dualscale(x, top_k)
 		else:
@@ -134,94 +138,98 @@ class XFeat(nn.Module):
 
 		return {'keypoints': mkpts,
 				'descriptors': feats,
-				'scales': sc }
-
+				'scales': sc}
 
 	@torch.inference_mode()
-	def match_lighterglue(self, d0, d1, min_conf = 0.1):
+	def match_lighterglue(self, dict0: dict, dict1: dict, min_conf=0.1):
 		"""
-			Match XFeat sparse features with LightGlue (smaller version) -- currently does NOT support batched inference because of padding, but its possible to implement easily.
-			input:
-				d0, d1: Dict('keypoints', 'scores, 'descriptors', 'image_size (Width, Height)')
-			output:
-				mkpts_0, mkpts_1 -> np.ndarray (N,2) xy coordinate matches from image1 to image2
-                                idx              -> np.ndarray (N,2) the indices of the matching features
-				
-		"""
-		if not self.kornia_available:
-			raise RuntimeError('We rely on kornia for LightGlue. Install with: pip install kornia')
-		elif self.lighterglue is None:
-			from modules.lighterglue import LighterGlue
-			self.lighterglue = LighterGlue()
+				Match XFeat sparse features with LightGlue (smaller version) -- currently does NOT support batched inference because of padding, but its possible to implement easily.
+				input:
+						d0, d1: Dict('keypoints', 'scores, 'descriptors', 'image_size (Width, Height)')
+				output:
+						mkpts_0, mkpts_1 -> np.ndarray (N,2) xy coordinate matches from image1 to image2
+						idx              -> np.ndarray (N,2) the indices of the matching features
 
+		"""
+
+		# Prepare data for lighterglue
 		data = {
-				'keypoints0': d0['keypoints'][None, ...],
-				'keypoints1': d1['keypoints'][None, ...],
-				'descriptors0': d0['descriptors'][None, ...],
-				'descriptors1': d1['descriptors'][None, ...],
-				'image_size0': torch.tensor(d0['image_size']).to(self.dev)[None, ...],
-				'image_size1': torch.tensor(d1['image_size']).to(self.dev)[None, ...]
+			'keypoints0': dict0['keypoints'][None, ...],
+			'keypoints1': dict1['keypoints'][None, ...],
+			'descriptors0': dict0['descriptors'][None, ...],
+			'descriptors1': dict1['descriptors'][None, ...],
+			'image_size0': torch.tensor(dict0['image_size']).to(self.dev)[None, ...],
+			'image_size1': torch.tensor(dict1['image_size']).to(self.dev)[None, ...]
 		}
 
-		#Dict -> log_assignment: [B x M+1 x N+1] matches0: [B x M] matching_scores0: [B x M] matches1: [B x N] matching_scores1: [B x N] matches: List[[Si x 2]], scores: List[[Si]]
+		# Dict -> log_assignment: [B x M+1 x N+1] matches0: [B x M] matching_scores0: [B x M] matches1: [B x N] matching_scores1: [B x N] matches: List[[Si x 2]], scores: List[[Si]]
 		print('Matching keypoints with LighterGlue...')
-		out = self.lighterglue(data, min_conf = min_conf)
+		out = self.lighterglue(data, min_conf=min_conf)
+
+		if out is None:
+			return np.zeros((0, 2)), np.zeros((0, 2)), np.zeros((0, 2), dtype=int), np.zeros((0,), dtype=float)
 
 		idxs = out['matches'][0]
 
-		return d0['keypoints'][idxs[:, 0]].cpu().numpy(), d1['keypoints'][idxs[:, 1]].cpu().numpy(), out['matches'][0].cpu().numpy(), out['scores'][0].cpu().numpy()
-
+		return dict0['keypoints'][idxs[:, 0]].cpu().numpy(), \
+			dict1['keypoints'][idxs[:, 1]].cpu().numpy(), \
+			out['matches'][0].cpu().numpy(), \
+			out['scores'][0].cpu().numpy()
 
 	@torch.inference_mode()
-	def match_xfeat(self, img1, img2, top_k = None, min_cossim = -1):
+	def match_xfeat(self, img1, img2, top_k=None, min_cossim=-1):
 		"""
-			Simple extractor and MNN matcher.
-			For simplicity it does not support batched mode due to possibly different number of kpts.
-			input:
-				img1 -> torch.Tensor (1,C,H,W) or np.ndarray (H,W,C): grayscale or rgb image.
-				img2 -> torch.Tensor (1,C,H,W) or np.ndarray (H,W,C): grayscale or rgb image.
-				top_k -> int: keep best k features
-			returns:
-				mkpts_0, mkpts_1 -> np.ndarray (N,2) xy coordinate matches from image1 to image2
+				Simple extractor and MNN matcher.
+				For simplicity it does not support batched mode due to possibly different number of kpts.
+				input:
+						img1 -> torch.Tensor (1,C,H,W) or np.ndarray (H,W,C): grayscale or rgb image.
+						img2 -> torch.Tensor (1,C,H,W) or np.ndarray (H,W,C): grayscale or rgb image.
+						top_k -> int: keep best k features
+				returns:
+						mkpts_0, mkpts_1 -> np.ndarray (N,2) xy coordinate matches from image1 to image2
 		"""
-		if top_k is None: top_k = self.top_k
+		if top_k is None:
+			top_k = self.top_k
 		img1 = self.parse_input(img1)
 		img2 = self.parse_input(img2)
 
 		out1 = self.detectAndCompute(img1, top_k=top_k)[0]
 		out2 = self.detectAndCompute(img2, top_k=top_k)[0]
 
-		idxs0, idxs1 = self.match(out1['descriptors'], out2['descriptors'], min_cossim=min_cossim )
+		idxs0, idxs1 = self.match(
+			out1['descriptors'], out2['descriptors'], min_cossim=min_cossim)
 
 		return out1['keypoints'][idxs0].cpu().numpy(), out2['keypoints'][idxs1].cpu().numpy()
 
 	@torch.inference_mode()
-	def match_xfeat_star(self, im_set1, im_set2, top_k = None):
+	def match_xfeat_star(self, im_set1, im_set2, top_k=None):
 		"""
-			Extracts coarse feats, then match pairs and finally refine matches, currently supports batched mode.
-			input:
-				im_set1 -> torch.Tensor(B, C, H, W) or np.ndarray (H,W,C): grayscale or rgb images.
-				im_set2 -> torch.Tensor(B, C, H, W) or np.ndarray (H,W,C): grayscale or rgb images.
-				top_k -> int: keep best k features
-			returns:
-				matches -> List[torch.Tensor(N, 4)]: List of size B containing tensor of pairwise matches (x1,y1,x2,y2)
+				Extracts coarse feats, then match pairs and finally refine matches, currently supports batched mode.
+				input:
+						im_set1 -> torch.Tensor(B, C, H, W) or np.ndarray (H,W,C): grayscale or rgb images.
+						im_set2 -> torch.Tensor(B, C, H, W) or np.ndarray (H,W,C): grayscale or rgb images.
+						top_k -> int: keep best k features
+				returns:
+						matches -> List[torch.Tensor(N, 4)]: List of size B containing tensor of pairwise matches (x1,y1,x2,y2)
 		"""
-		if top_k is None: top_k = self.top_k
+		if top_k is None:
+			top_k = self.top_k
 		im_set1 = self.parse_input(im_set1)
 		im_set2 = self.parse_input(im_set2)
 
-		#Compute coarse feats
+		# Compute coarse feats
 		out1 = self.detectAndComputeDense(im_set1, top_k=top_k)
 		out2 = self.detectAndComputeDense(im_set2, top_k=top_k)
 
-		#Match batches of pairs
-		idxs_list = self.batch_match(out1['descriptors'], out2['descriptors'] )
+		# Match batches of pairs
+		idxs_list = self.batch_match(out1['descriptors'], out2['descriptors'])
 		B = len(im_set1)
 
 		# Refine coarse matches this part is harder to batch, currently iterate
 		matches = []
 		for b in range(B):
-			matches.append(self.refine_matches(out1, out2, matches = idxs_list, batch_idx=b))
+			matches.append(self.refine_matches(
+				out1, out2, matches=idxs_list, batch_idx=b))
 
 		return matches if B > 1 else (matches[0][:, :2].cpu().numpy(), matches[0][:, 2:].cpu().numpy())
 
@@ -229,12 +237,13 @@ class XFeat(nn.Module):
 		""" Guarantee that image is divisible by 32 to avoid aliasing artifacts. """
 		if isinstance(x, np.ndarray):
 			if len(x.shape) == 3:
-				x = torch.tensor(x).permute(2,0,1)[None]
+				x = torch.tensor(x).permute(2, 0, 1)[None]
 			elif len(x.shape) == 2:
-				x = torch.tensor(x[..., None]).permute(2,0,1)[None]
+				x = torch.tensor(x[..., None]).permute(2, 0, 1)[None]
 			else:
-				raise RuntimeError('For numpy arrays, only (H,W) or (H,W,C) format is supported.')
-			
+				raise RuntimeError(
+					'For numpy arrays, only (H,W) or (H,W,C) format is supported.')
+
 		elif isinstance(x, torch.Tensor):
 
 			# Check size of tensor
@@ -245,14 +254,15 @@ class XFeat(nn.Module):
 			elif len(x.shape) == 2:
 				x = x.unsqueeze(0).unsqueeze(0)
 			else:
-				raise RuntimeError('Invalid input tensor shape: {}'.format(x.shape))
+				raise RuntimeError(
+					'Invalid input tensor shape: {}'.format(x.shape))
 
 		else:
 			raise TypeError('Input needs to be a numpy array or torch tensor')
-		
+
 		if len(x.shape) != 4:
 			raise RuntimeError('Input tensor needs to be in (B,C,H,W) format')
-	
+
 		x = x.to(self.dev).float()
 
 		H, W = x.shape[-2:]
@@ -262,35 +272,36 @@ class XFeat(nn.Module):
 		x = F.interpolate(x, (_H, _W), mode='bilinear', align_corners=False)
 		return x, rh, rw
 
-	def get_kpts_heatmap(self, kpts, softmax_temp = 1.0):
+	def get_kpts_heatmap(self, kpts, softmax_temp=1.0):
 		scores = F.softmax(kpts*softmax_temp, 1)[:, :64]
 		B, _, H, W = scores.shape
 		heatmap = scores.permute(0, 2, 3, 1).reshape(B, H, W, 8, 8)
 		heatmap = heatmap.permute(0, 1, 3, 2, 4).reshape(B, 1, H*8, W*8)
 		return heatmap
 
-	def NMS(self, x, threshold = 0.05, kernel_size = 5):
+	def NMS(self, x, threshold=0.05, kernel_size=5):
 		B, _, H, W = x.shape
-		pad=kernel_size//2
-		local_max = nn.MaxPool2d(kernel_size=kernel_size, stride=1, padding=pad)(x)
+		pad = kernel_size//2
+		local_max = nn.MaxPool2d(
+			kernel_size=kernel_size, stride=1, padding=pad)(x)
 		pos = (x == local_max) & (x > threshold)
 		pos_batched = [k.nonzero()[..., 1:].flip(-1) for k in pos]
 
 		pad_val = max([len(x) for x in pos_batched])
 		pos = torch.zeros((B, pad_val, 2), dtype=torch.long, device=x.device)
 
-		#Pad kpts and build (B, N, 2) tensor
+		# Pad kpts and build (B, N, 2) tensor
 		for b in range(len(pos_batched)):
 			pos[b, :len(pos_batched[b]), :] = pos_batched[b]
 
 		return pos
 
 	@torch.inference_mode()
-	def batch_match(self, feats1, feats2, min_cossim = -1):
+	def batch_match(self, feats1, feats2, min_cossim=-1):
 		B = len(feats1)
-		cossim = torch.bmm(feats1, feats2.permute(0,2,1))
+		cossim = torch.bmm(feats1, feats2.permute(0, 2, 1))
 		match12 = torch.argmax(cossim, dim=-1)
-		match21 = torch.argmax(cossim.permute(0,2,1), dim=-1)
+		match21 = torch.argmax(cossim.permute(0, 2, 1), dim=-1)
 
 		idx0 = torch.arange(len(match12[0]), device=match12.device)
 
@@ -312,21 +323,24 @@ class XFeat(nn.Module):
 
 		return batched_matches
 
-	def subpix_softmax2d(self, heatmaps, temp = 3):
+	def subpix_softmax2d(self, heatmaps, temp=3):
 		N, H, W = heatmaps.shape
-		heatmaps = torch.softmax(temp * heatmaps.view(-1, H*W), -1).view(-1, H, W)
-		x, y = torch.meshgrid(torch.arange(W, device =  heatmaps.device ), torch.arange(H, device =  heatmaps.device ), indexing = 'xy')
+		heatmaps = torch.softmax(
+			temp * heatmaps.view(-1, H*W), -1).view(-1, H, W)
+		x, y = torch.meshgrid(torch.arange(W, device=heatmaps.device), torch.arange(
+			H, device=heatmaps.device), indexing='xy')
 		x = x - (W//2)
 		y = y - (H//2)
 
 		coords_x = (x[None, ...] * heatmaps)
 		coords_y = (y[None, ...] * heatmaps)
-		coords = torch.cat([coords_x[..., None], coords_y[..., None]], -1).view(N, H*W, 2)
+		coords = torch.cat(
+			[coords_x[..., None], coords_y[..., None]], -1).view(N, H*W, 2)
 		coords = coords.sum(1)
 
 		return coords
 
-	def refine_matches(self, d0, d1, matches, batch_idx, fine_conf = 0.25):
+	def refine_matches(self, d0, d1, matches, batch_idx, fine_conf=0.25):
 		idx0, idx1 = matches[batch_idx]
 		feats1 = d0['descriptors'][batch_idx][idx0]
 		feats2 = d1['descriptors'][batch_idx][idx1]
@@ -334,12 +348,12 @@ class XFeat(nn.Module):
 		mkpts_1 = d1['keypoints'][batch_idx][idx1]
 		sc0 = d0['scales'][batch_idx][idx0]
 
-		#Compute fine offsets
-		offsets = self.net.fine_matcher(torch.cat([feats1, feats2],dim=-1))
+		# Compute fine offsets
+		offsets = self.net.fine_matcher(torch.cat([feats1, feats2], dim=-1))
 		conf = F.softmax(offsets*3, dim=-1).max(dim=-1)[0]
-		offsets = self.subpix_softmax2d(offsets.view(-1,8,8))
+		offsets = self.subpix_softmax2d(offsets.view(-1, 8, 8))
 
-		mkpts_0 += offsets* (sc0[:,None]) #*0.9 #* (sc0[:,None])
+		mkpts_0 += offsets * (sc0[:, None])  # *0.9 #* (sc0[:,None])
 
 		mask_good = conf > fine_conf
 		mkpts_0 = mkpts_0[mask_good]
@@ -348,11 +362,11 @@ class XFeat(nn.Module):
 		return torch.cat([mkpts_0, mkpts_1], dim=-1)
 
 	@torch.inference_mode()
-	def match(self, feats1, feats2, min_cossim = 0.82):
+	def match(self, feats1, feats2, min_cossim=0.82):
 
 		cossim = feats1 @ feats2.t()
 		cossim_t = feats2 @ feats1.t()
-		
+
 		_, match12 = cossim.max(dim=1)
 		_, match21 = cossim_t.max(dim=1)
 
@@ -371,36 +385,38 @@ class XFeat(nn.Module):
 		return idx0, idx1
 
 	def create_xy(self, h, w, dev):
-		y, x = torch.meshgrid(torch.arange(h, device = dev), 
-								torch.arange(w, device = dev), indexing='ij')
-		xy = torch.cat([x[..., None],y[..., None]], -1).reshape(-1,2)
+		y, x = torch.meshgrid(torch.arange(h, device=dev),
+							  torch.arange(w, device=dev), indexing='ij')
+		xy = torch.cat([x[..., None], y[..., None]], -1).reshape(-1, 2)
 		return xy
 
-	def extractDense(self, x, top_k = 8_000):
+	def extractDense(self, x, top_k=8_000):
 		if top_k < 1:
 			top_k = 100_000_000
 
 		x, rh1, rw1 = self.preprocess_tensor(x)
 
 		M1, K1, H1 = self.net(x)
-		
+
 		B, C, _H1, _W1 = M1.shape
-		
-		xy1 = (self.create_xy(_H1, _W1, M1.device) * 8).expand(B,-1,-1)
 
-		M1 = M1.permute(0,2,3,1).reshape(B, -1, C)
-		H1 = H1.permute(0,2,3,1).reshape(B, -1)
+		xy1 = (self.create_xy(_H1, _W1, M1.device) * 8).expand(B, -1, -1)
 
-		_, top_k = torch.topk(H1, k = min(len(H1[0]), top_k), dim=-1)
+		M1 = M1.permute(0, 2, 3, 1).reshape(B, -1, C)
+		H1 = H1.permute(0, 2, 3, 1).reshape(B, -1)
 
-		feats = torch.gather( M1, 1, top_k[...,None].expand(-1, -1, 64))
-		mkpts = torch.gather(xy1, 1, top_k[...,None].expand(-1, -1, 2))
-		mkpts = mkpts * torch.tensor([rw1, rh1], device=mkpts.device).view(1,-1)
+		_, top_k = torch.topk(H1, k=min(len(H1[0]), top_k), dim=-1)
+
+		feats = torch.gather(M1, 1, top_k[..., None].expand(-1, -1, 64))
+		mkpts = torch.gather(xy1, 1, top_k[..., None].expand(-1, -1, 2))
+		mkpts = mkpts * torch.tensor([rw1, rh1],
+									 device=mkpts.device).view(1, -1)
 
 		return mkpts, feats
 
-	def extract_dualscale(self, x, top_k, s1 = 0.6, s2 = 1.3):
-		x1 = F.interpolate(x, scale_factor=s1, align_corners=False, mode='bilinear')
+	def extract_dualscale(self, x, top_k, s1=0.6, s2=1.3):
+		x1 = F.interpolate(x, scale_factor=s1,
+						   align_corners=False, mode='bilinear')
 		x2 = F.interpolate(x, scale_factor=s2, align_corners=False, mode='bilinear')
 
 		B, _, _, _ = x.shape
@@ -411,7 +427,7 @@ class XFeat(nn.Module):
 		mkpts = torch.cat([mkpts_1/s1, mkpts_2/s2], dim=1)
 		sc1 = torch.ones(mkpts_1.shape[:2], device=mkpts_1.device) * (1/s1)
 		sc2 = torch.ones(mkpts_2.shape[:2], device=mkpts_2.device) * (1/s2)
-		sc = torch.cat([sc1, sc2],dim=1)
+		sc = torch.cat([sc1, sc2], dim=1)
 		feats = torch.cat([feats_1, feats_2], dim=1)
 
 		return mkpts, sc, feats
@@ -421,37 +437,116 @@ class XFeat(nn.Module):
 			x = x[None, ...]
 
 		if isinstance(x, np.ndarray):
-			x = torch.tensor(x).permute(0,3,1,2)/255
+			x = torch.tensor(x).permute(0, 3, 1, 2)/255
 
 		return x
 
 
 class XFeatLightGlueWrapper(nn.Module):
-	def __init__(self, top_k: int = 4096, detection_threshold: float = 0.05, device: str | None = None) -> None:
+	"""
+	Wrapper for XFeat and LighterGlue models performing feature extraction and matching.
+	"""
+	def __init__(self,
+				 top_k: int = 4096,
+				 detection_threshold: float = 0.05,
+				 weights_checkpoint_filepaths: str = os.path.abspath(
+					 os.path.dirname(__file__)) + '/../weights/xfeat.pt',
+				 device: str | None = None) -> None:
+		"""
+		__init__ _summary_
+
+		_extended_summary_
+
+		:param top_k: _description_, defaults to 4096
+		:type top_k: int, optional
+		:param detection_threshold: _description_, defaults to 0.05
+		:type detection_threshold: float, optional
+		:param weights_checkpoint_filepaths: _description_, defaults to os.path.abspath( os.path.dirname(__file__))+'/../weights/xfeat.pt'
+		:type weights_checkpoint_filepaths: str, optional
+		:param device: _description_, defaults to None
+		:type device: str | None, optional
+		:raises FileNotFoundError: _description_
+		"""
 		super(XFeatLightGlueWrapper, self).__init__()
+
+		# Check if weights_checkpoint_filepaths exists
+		if not os.path.isfile(weights_checkpoint_filepaths):
+			raise FileNotFoundError(
+				f"weights_checkpoint_filepaths {weights_checkpoint_filepaths} not found.")
 
 		if device is None:
 			device = GetDevice()
 
 		# Define XFeat model class to load
 		# Use class in xfeat.py in accelerated_features_PeterCdev repo
-
-		self.xfeat = XFeat(weights=os.path.abspath(os.path.dirname(__file__)) + '/../weights/xfeat.pt',
-							top_k=top_k, detection_threshold=detection_threshold, device=device)
+		self.xfeat_extract_descript = XFeat(weights=weights_checkpoint_filepaths,
+											top_k=top_k,
+											detection_threshold=detection_threshold,
+											device=device)
 
 		# Use class in lighterglue.py in accelerated_features_PeterCdev repo
 		# self.lighterglue = LighterGlue( weights = os.path.join(REPO_XFEAT_PATH, "weights/xfeat-lighterglue.pt") )
 
-	def forward(self, input_data: dict | list[torch.Tensor | np.ndarray]) -> dict:
+	def _extract_descript(self,
+						 img: torch.Tensor,
+						 top_k: int = 2048) -> dict[str, torch.Tensor]:
+		"""
+		_extract_descript _summary_
+
+		_extended_summary_
+
+		:param img: _description_
+		:type img: torch.Tensor
+		:param top_k: _description_, defaults to 2048
+		:type top_k: int, optional
+		:raises ValueError: _description_
+		:return: _description_
+		:rtype: _type_
+		"""
+
+		if not isinstance(img, torch.Tensor) or img.ndim != 4 or img.shape[0] != 1:
+			raise ValueError(
+				"img must be a torch tensor of shape (1, C, H, W).")
+
+		print('Extracting and descripting keypoints with XFeat...')
+		kpsDict = self.xfeat_extract_descript.detectAndCompute(img, top_k=top_k)[0]
+		# (Width, Height)
+
+		assert kpsDict is dict, "Output of detectAndCompute must be a dictionary."
+
+		kpsDict.update({'image_size': (img.shape[2], img.shape[3])})
+		return kpsDict
+
+	def forward(self,
+				input_data: dict | list[torch.Tensor | np.ndarray],
+				forward_mode: Literal['image_image', 'feats_image', 'image'] = 'image_image') -> dict:
+
 		if isinstance(input_data, dict):
-			if 'image0' in input_data and 'image1' in input_data:
-				im1 = input_data['image0']
-				im2 = input_data['image1']
-			else:
-				raise ValueError(
-					"Input dictionary must contain keys 'image0' and 'image1'.")
+
+			if forward_mode == 'image_image' or forward_mode == 'image':
+				if 'image0' in input_data:
+					im0 = input_data['image0']
+				else:
+					raise ValueError(
+						"Input dictionary must contain key: 'image0'.")
+
+				if not isinstance(im0, (torch.Tensor, np.ndarray)):
+					raise ValueError(
+						"Input images not valid. Must be torch tensors or np.ndarray.")
+
+			if forward_mode == 'image_image' or forward_mode == 'feats_image':
+				if 'image1' in input_data:
+					im1 = input_data['image1']
+				else:
+					raise ValueError(
+						"Input dictionary must contain key: 'image1'.")
+
+				if not isinstance(im1, (torch.Tensor, np.ndarray)):
+					raise ValueError(
+						"Input images not valid. Must be torch tensors or np.ndarray.")
 
 		elif isinstance(input_data, list):
+			raise NotImplementedError('TO UPDATE')
 			if len(input_data) == 2:
 				im1 = input_data[0]
 				im2 = input_data[1]
@@ -462,17 +557,25 @@ class XFeatLightGlueWrapper(nn.Module):
 			raise ValueError(
 				"Input data type not valid. Must be a dictionary or a list.")
 
-		if not isinstance(im1, (torch.Tensor, np.ndarray)) or not isinstance(im2, (torch.Tensor, np.ndarray)):
-			raise ValueError("Input images not valid. Must be torch tensors or np.ndarray.")
-
 		# Inference with batch = 1
-		print('Extracting and descripting keypoints with LighterGlue...')
-		kpsDict0 = self.xfeat.detectAndCompute(im1, top_k=2048)[0]  # Get keypoints only
-		kpsDict1 = self.xfeat.detectAndCompute(im2, top_k=2048)[0]
+		if forward_mode == 'image_image' or forward_mode == 'image':
+			kpsDict0 = self._extract_descript(im0, top_k=2048)[0]  # Get keypoints only
+		else:
+			assert 'keypoints0' in input_data and 'descriptors0' in input_data, "Input dictionary must contain keys: 'keypoints0', 'descriptors0'."
+			kpsDict0 = {'keypoints': input_data['keypoints0'],
+						'descriptors': input_data['descriptors0']}
 
-		# Update with image resolution (required)
-		kpsDict0.update({'image_size': (im1.shape[1], im1.shape[0])})
-		kpsDict1.update({'image_size': (im2.shape[1], im2.shape[0])})
+		if forward_mode == 'image_image' or forward_mode == 'feats_image':
+			kpsDict1 = self._extract_descript(im1, top_k=2048)[0]   
+			
+			if forward_mode == 'feats_image':
+				kpsDict0.update({'image_size': (im1.shape[2], im1.shape[3])})
+
+
+		if forward_mode == 'image':
+			return {'keypoints0': kpsDict0['keypoints'],
+					'scores0': kpsDict0['scores'],
+					'descriptors0': kpsDict0['descriptors']}
 
 		# Match keypoints (no need to do automatically)
 		# lighterglue_input_dict = {
@@ -489,11 +592,17 @@ class XFeatLightGlueWrapper(nn.Module):
 		# out['matches'][0].cpu().numpy()
 		# mkpts_0, mkpts_1, out = self.lighterglue(lighterglue_input_dict, min_conf=min_conf)
 
-		# FIXME XFeat + Light glue with server is failing here
-	
-		mkpts_0, mkpts_1, matches, scores = self.xfeat.match_lighterglue(
-			kpsDict0, kpsDict1)
+		mkpts_0, mkpts_1, matches, scores = self.xfeat_extract_descript.match_lighterglue(dict0=kpsDict0,
+																						  dict1=kpsDict1)
 
 		# Return output dictionary ['keypoints0', 'scores0', 'descriptors0', 'keypoints1', 'scores1', 'descriptors1', 'matches0', 'matches1', 'matching_scores0', 'matching_scores1']
-		
-		return {'keypoints0': mkpts_0, 'scores0': kpsDict0['scores'], 'descriptors0': kpsDict0['descriptors'],'keypoints1': mkpts_1, 'scores1': kpsDict1['scores'], 'descriptors1': kpsDict1['descriptors'], 'matches0': matches, 'matching_scores0': scores}
+
+		return {'keypoints0': mkpts_0,
+				'scores0': kpsDict0['scores'],
+				'descriptors0': kpsDict0['descriptors'],
+				'keypoints1': mkpts_1,
+				'scores1': kpsDict1['scores'],
+				'descriptors1': kpsDict1['descriptors'],
+				'matches0': matches,
+				'matching_scores0': scores}
+                'matching_scores0': scores}
